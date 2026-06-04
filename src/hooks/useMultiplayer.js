@@ -282,8 +282,8 @@ export default function useMultiplayer() {
   }, [peerId, broadcast]);
 
   // ── Send GAME_START ──
-  const sendGameStart = useCallback((gameState) => {
-    broadcast({ type: 'GAME_START', gameState });
+  const sendGameStart = useCallback((gameState, players) => {
+    broadcast({ type: 'GAME_START', gameState, players });
   }, [broadcast]);
 
   // ── Track connection count (memoised — stable reference) ──

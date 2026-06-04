@@ -11,8 +11,8 @@
 import React, { createContext, useContext, useReducer, useCallback, useEffect, useRef } from 'react';
 import {
   createInitialState, executeMove, rollDiceForCurrent,
-  getMovableTokens, rollDice, getAIMove, getTokenCoords,
-  ENTRY_POSITIONS, SAFE_SPOTS, MAIN_TRACK, PLAYER_COLORS,
+  getMovableTokens, getAIMove, getTokenCoords,
+  ENTRY_POSITIONS, MAIN_TRACK, PLAYER_COLORS,
 } from '../utils/gameLogic';
 import { playDiceRoll, playMove, playCapture, playHomeEntry, playWin, playNotification } from '../utils/sound';
 import useMultiplayer from '../hooks/useMultiplayer';
@@ -161,6 +161,7 @@ export function GameProvider({ children }) {
 
   // Build merged player list whenever allPeers or botCount changes
   useEffect(() => {
+    if (state.gameStarted) return; // Don't override during gameplay — host's list is authoritative
     const peers = mpRef.current.allPeers || [];
     const humans = peers.map((id, i) => ({
       id,
@@ -168,7 +169,7 @@ export function GameProvider({ children }) {
     }));
     const merged = buildPlayerList(humans, stateRef.current.botCount);
     dispatch({ type: ACTIONS.SET_PLAYERS_LIST, payload: merged });
-  }, [mp.allPeers, state.botCount]);
+  }, [mp.allPeers, state.botCount, state.gameStarted]);
 
   // Total effective players (humans + bots, at least 2 for the game to start)
   const effectivePlayerCount = Math.max(2, Math.min(4, humanCount + state.botCount));
@@ -192,6 +193,9 @@ export function GameProvider({ children }) {
         dispatch({ type: ACTIONS.SET_GAME_STATE, payload: msg.gameState });
         dispatch({ type: ACTIONS.SET_GAME_STARTED, payload: true });
         dispatch({ type: ACTIONS.SET_SCREEN, payload: 'game' });
+        if (msg.players) {
+          dispatch({ type: ACTIONS.SET_PLAYERS_LIST, payload: msg.players });
+        }
         playNotification();
       }
       if (msg.type === 'TOKEN_MOVE') {
@@ -272,7 +276,7 @@ export function GameProvider({ children }) {
     dispatch({ type: ACTIONS.SET_GAME_STATE, payload: gameState });
     dispatch({ type: ACTIONS.SET_GAME_STARTED, payload: true });
     dispatch({ type: ACTIONS.SET_SCREEN, payload: 'game' });
-    mpRef.current.sendGameStart(gameState);
+    mpRef.current.sendGameStart(gameState, stateRef.current.players);
     playNotification();
   }, [effectivePlayerCount]);
 
@@ -292,23 +296,21 @@ export function GameProvider({ children }) {
     playDiceRoll();
 
     const newState = rollDiceForCurrent(gs);
+    const rolledValue = newState.lastDiceRoll ?? newState.diceValue;
     dispatch({ type: ACTIONS.SET_GAME_STATE, payload: newState });
-    dispatch({ type: ACTIONS.PUSH_DICE_HISTORY, payload: newState.diceValue });
-    // Send the dice value from the new state to peers
-    mpRef.current.sendDiceRoll(newState.diceValue);
+    dispatch({ type: ACTIONS.PUSH_DICE_HISTORY, payload: rolledValue });
+    // Send the actual rolled value to peers, even when turn auto-passes.
+    mpRef.current.sendDiceRoll(rolledValue);
     mpRef.current.sendGameState(newState);
 
     // ── Toast for special dice results ──
-    if (newState.diceValue === 6) {
-      const sixes = newState.consecutiveSixes + 1;
-      if (sixes >= 3) {
-        pushToast('Three 6s in a row! Turn forfeited.', 'warning', 3000);
-      } else {
-        pushToast(`Rolled a 6! ${sixes === 2 ? '⚠️ Watch out — one more and turn ends!' : 'Roll again.'}`, 'dice', 2200, '🎯');
-      }
-    } else if (newState.turnPhase === 'roll') {
-      // No movable tokens — turn was forfeited
-      pushToast('No movable tokens. Turn passes.', 'info', 1800, '⏭️');
+    if (newState.lastRollForfeitedByThreeSixes) {
+      pushToast('Three 6s in a row! Turn forfeited.', 'warning', 3000);
+    } else if (rolledValue === 6 && !newState.lastRollHadNoMove) {
+      const sixes = newState.consecutiveSixes;
+      pushToast(`Rolled a 6! ${sixes === 2 ? '⚠️ Watch out — one more and turn ends!' : 'Roll again.'}`, 'dice', 2200, '🎯');
+    } else if (newState.lastRollHadNoMove) {
+      pushToast(`Rolled ${rolledValue}. No movable tokens. Turn passes.`, 'info', 1800, '⏭️');
     }
   }, [pushToast]);
 
@@ -332,35 +334,13 @@ export function GameProvider({ children }) {
       return;
     }
 
-    // ── Detect captures & home entries BEFORE the move ──
-    const capturedList = [];
-    let reachedHome = false;
-    const tokenSteps = gs.players[currentIdx].tokens[tokenIndex]?.steps ?? 0;
-    const newSteps = tokenSteps + gs.diceValue;
-
-    // Check for captures
-    if (tokenSteps < 52 && newSteps < 52) {
-      const newAbs = (ENTRY_POSITIONS[currentIdx] + newSteps) % 52;
-      if (!SAFE_SPOTS.has(newAbs)) {
-        for (let p = 0; p < gs.playerCount; p++) {
-          if (p === currentIdx) continue;
-          for (let t = 0; t < 4; t++) {
-            const tok = gs.players[p].tokens[t];
-            if (tok && tok.steps < 52) {
-              const oAbs = (ENTRY_POSITIONS[p] + tok.steps) % 52;
-              if (oAbs === newAbs) {
-                capturedList.push({ player: p, token: t });
-              }
-            }
-          }
-        }
-      }
-    }
-
-    // Check for reaching home
-    if (newSteps >= 58) reachedHome = true;
+    const startTok = gs.players[currentIdx].tokens[tokenIndex];
+    const newSteps = startTok ? startTok.steps + gs.diceValue : 0;
 
     const newState = executeMove(gs, currentIdx, tokenIndex);
+    const moveMeta = newState.lastMove || {};
+    const capturedList = moveMeta.captured || [];
+    const reachedHome = Boolean(moveMeta.reachedHome);
 
     // ── Trigger RPG capture animation ──
     if (capturedList.length > 0) {
@@ -376,7 +356,7 @@ export function GameProvider({ children }) {
       // Clear after animation
       setTimeout(() => dispatch({ type: ACTIONS.CLEAR_CAPTURE_EVENT }), 1200);
       const capName = PLAYER_COLORS[capturedList[0].player]?.name || 'Opponent';
-      pushToast(`Captured ${capName}'s token!`, 'capture', 2200);
+      pushToast(`Captured ${capName}'s token! Extra roll.`, 'capture', 2200);
     }
 
     // ── Trigger home arrival animation ──
@@ -390,7 +370,7 @@ export function GameProvider({ children }) {
           payload: { color, row: coords[0], col: coords[1] }
         });
         setTimeout(() => dispatch({ type: ACTIONS.CLEAR_HOME_EVENT }), 1000);
-        pushToast('Reached HOME!', 'home', 2000, '🏠');
+        pushToast('Reached HOME! Extra roll.', 'home', 2000, '🏠');
       }
     }
 
@@ -406,7 +386,6 @@ export function GameProvider({ children }) {
 
     // ── F1 Per-step movement animation ──
     // Compute the path the token will traverse
-    const startTok = gs.players[currentIdx].tokens[tokenIndex];
     const startInBase = !startTok;
     const startSteps = startTok?.steps ?? -1;
     const diceVal = gs.diceValue;
@@ -545,19 +524,19 @@ export function GameProvider({ children }) {
         // Bot rolls dice
         playDiceRoll();
         const newState = rollDiceForCurrent(latest);
+        const rolledValue = newState.lastDiceRoll ?? newState.diceValue;
         dispatch({ type: ACTIONS.SET_GAME_STATE, payload: newState });
-        dispatch({ type: ACTIONS.PUSH_DICE_HISTORY, payload: newState.diceValue });
-        latestMp.sendDiceRoll(newState.diceValue);
+        dispatch({ type: ACTIONS.PUSH_DICE_HISTORY, payload: rolledValue });
+        latestMp.sendDiceRoll(rolledValue);
         latestMp.sendGameState(newState);
         dispatch({ type: ACTIONS.SET_BOT_THINKING, payload: false });
 
         // ── Bot roll toasts (silent — bots don't toast for their own rolls unless notable) ──
-        if (newState.diceValue === 6) {
-          const sixes = newState.consecutiveSixes + 1;
-          const botName = stateRef.current.players[currentIdx]?.name || 'Bot';
-          if (sixes >= 3) {
-            pushToast(`${botName} rolled three 6s! Turn forfeited.`, 'warning', 2800);
-          }
+        const botName = stateRef.current.players[currentIdx]?.name || 'Bot';
+        if (newState.lastRollForfeitedByThreeSixes) {
+          pushToast(`${botName} rolled three 6s! Turn forfeited.`, 'warning', 2800);
+        } else if (newState.lastRollHadNoMove) {
+          pushToast(`${botName} rolled ${rolledValue}. No moves.`, 'info', 1600, '⏭️');
         }
       } else if (latest.turnPhase === 'move') {
         // Bot picks best move
@@ -567,31 +546,12 @@ export function GameProvider({ children }) {
           return;
         }
 
-        // Detect captures & home entries
-        const botCaptured = [];
-        const botTokenSteps = latest.players[currentIdx].tokens[chosen]?.steps ?? 0;
-        const botNewSteps = botTokenSteps + latest.diceValue;
-        let botReachedHome = false;
-
-        if (botTokenSteps < 52 && botNewSteps < 52) {
-          const newAbs = (ENTRY_POSITIONS[currentIdx] + botNewSteps) % 52;
-          if (!SAFE_SPOTS.has(newAbs)) {
-            for (let p = 0; p < latest.playerCount; p++) {
-              if (p === currentIdx) continue;
-              for (let t = 0; t < 4; t++) {
-                const tok = latest.players[p].tokens[t];
-                if (tok && tok.steps < 52) {
-                  if ((ENTRY_POSITIONS[p] + tok.steps) % 52 === newAbs) {
-                    botCaptured.push({ player: p, token: t });
-                  }
-                }
-              }
-            }
-          }
-        }
-        if (botNewSteps >= 58) botReachedHome = true;
-
+        const botStartTok = latest.players[currentIdx].tokens[chosen];
+        const botNewSteps = botStartTok ? botStartTok.steps + latest.diceValue : 0;
         const newState = executeMove(latest, currentIdx, chosen);
+        const botMoveMeta = newState.lastMove || {};
+        const botCaptured = botMoveMeta.captured || [];
+        const botReachedHome = Boolean(botMoveMeta.reachedHome);
 
         // Capture animation
         if (botCaptured.length > 0) {
@@ -603,7 +563,7 @@ export function GameProvider({ children }) {
           dispatch({ type: ACTIONS.SET_CAPTURE_EVENT, payload: { attackerColor: atkColor, capturedColor: capColor, row, col } });
           setTimeout(() => dispatch({ type: ACTIONS.CLEAR_CAPTURE_EVENT }), 1200);
           const capName = PLAYER_COLORS[botCaptured[0].player]?.name || 'Opponent';
-          pushToast(`Bot captured ${capName}'s token!`, 'capture', 2200);
+          pushToast(`Bot captured ${capName}'s token! Extra roll.`, 'capture', 2200);
         }
 
         // Home animation
@@ -614,7 +574,7 @@ export function GameProvider({ children }) {
             const hColor = PLAYER_COLORS[currentIdx]?.css || 'red';
             dispatch({ type: ACTIONS.SET_HOME_EVENT, payload: { color: hColor, row: botHomeCoords[0], col: botHomeCoords[1] } });
             setTimeout(() => dispatch({ type: ACTIONS.CLEAR_HOME_EVENT }), 1000);
-            pushToast('Bot reached HOME!', 'home', 1800, '🏠');
+            pushToast('Bot reached HOME! Extra roll.', 'home', 1800, '🏠');
           }
         }
 
@@ -628,7 +588,6 @@ export function GameProvider({ children }) {
         }
 
         // ── F1 Per-step movement animation (bot) ──
-        const botStartTok = latest.players[currentIdx].tokens[chosen];
         const botStartInBase = !botStartTok;
         const botStartSteps = botStartTok?.steps ?? -1;
         const botPath = [];

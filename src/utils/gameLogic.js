@@ -160,16 +160,63 @@ export function canMoveToken(state, playerIndex, tokenIndex, dice) {
   const token = state.players[playerIndex].tokens[tokenIndex];
 
   if (token?.steps >= 58) return false;    // already home
-  if (!token) return dice === 6;           // in base, need 6
+  if (!token) {
+    if (dice !== 6) return false;          // in base, need 6
+    return !pathCrossesOpponentBlock(state, playerIndex, -1, 0);
+  }
 
   const newSteps = token.steps + dice;
   // Cannot overshoot centre (beyond step 58)
-  return newSteps <= 58;
+  if (newSteps > 58) return false;
+
+  // Cannot pass through or land on an opponent block (2+ tokens of same colour)
+  return !pathCrossesOpponentBlock(state, playerIndex, token.steps, newSteps);
 }
 
 // ──────────────────────────────────────────────
-// 7. CAPTURE
+// 7. CAPTURE & BLOCKS
 // ──────────────────────────────────────────────
+
+/**
+ * Build absolute main-track indices occupied by 2+ same-colour tokens.
+ * Blocks apply only on the main track, never in base/home stretch/home.
+ */
+function getPlayerBlockPositions(state, ownerIndex) {
+  const counts = new Map();
+  const owner = state.players[ownerIndex];
+  if (!owner) return new Set();
+
+  for (const tok of owner.tokens) {
+    if (!tok || tok.steps >= 52) continue;
+    const absIdx = (ENTRY_POSITIONS[ownerIndex] + tok.steps) % 52;
+    counts.set(absIdx, (counts.get(absIdx) || 0) + 1);
+  }
+
+  return new Set([...counts.entries()]
+    .filter(([, count]) => count >= 2)
+    .map(([absIdx]) => absIdx));
+}
+
+function pathCrossesOpponentBlock(state, playerIndex, fromSteps, toSteps) {
+  if (fromSteps >= 52) return false; // home stretch has no blocks
+
+  const lastMainStep = Math.min(toSteps, 51);
+  if (lastMainStep < fromSteps + 1) return false;
+
+  const opponentBlocks = new Set();
+  for (let p = 0; p < state.playerCount; p++) {
+    if (p === playerIndex) continue;
+    for (const absIdx of getPlayerBlockPositions(state, p)) {
+      opponentBlocks.add(absIdx);
+    }
+  }
+
+  for (let step = fromSteps + 1; step <= lastMainStep; step++) {
+    const absIdx = (ENTRY_POSITIONS[playerIndex] + step) % 52;
+    if (opponentBlocks.has(absIdx)) return true;
+  }
+  return false;
+}
 
 /**
  * Check if a token landing at `steps` captures any opponent.
@@ -183,6 +230,8 @@ function checkCapture(state, playerIndex, steps) {
   const captures = [];
   for (let p = 0; p < state.playerCount; p++) {
     if (p === playerIndex) continue;
+    if (getPlayerBlockPositions(state, p).has(absIdx)) return null;
+
     for (let t = 0; t < 4; t++) {
       const tok = state.players[p].tokens[t];
       if (!tok || tok.steps >= 52) continue;   // not on main track
@@ -206,6 +255,11 @@ export function executeMove(state, playerIndex, tokenIndex) {
   const dice = newState.diceValue;
 
   let captured = null;
+  let reachedHome = false;
+
+  if (!canMoveToken(state, playerIndex, tokenIndex, dice)) {
+    return state;
+  }
 
   if (!token) {
     // ── Enter from base ──
@@ -214,14 +268,11 @@ export function executeMove(state, playerIndex, tokenIndex) {
   } else {
     // ── Move forward on track / home stretch ──
     const newSteps = token.steps + dice;
-    if (newSteps > 58) {
-      // Cannot overshoot — invalid move (validation should prevent)
-      return state;
-    }
     player.tokens[tokenIndex] = { steps: newSteps };
 
     if (newSteps >= 58) {
       player.homeCount++;
+      reachedHome = true;
     } else if (newSteps < 52) {
       // Still on main track — check capture
       captured = checkCapture(newState, playerIndex, newSteps);
@@ -236,6 +287,8 @@ export function executeMove(state, playerIndex, tokenIndex) {
     }
   }
 
+  const earnedBonusRoll = dice === 6 || Boolean(captured) || reachedHome;
+
   // ── Advance turn ──
   if (dice === 6) {
     newState.consecutiveSixes++;
@@ -244,11 +297,16 @@ export function executeMove(state, playerIndex, tokenIndex) {
       newState.consecutiveSixes = 0;
       advanceTurn(newState);
     } else {
-      // Roll again
       newState.diceValue = null;
       newState.diceRolled = false;
       newState.turnPhase = 'roll';
     }
+  } else if (earnedBonusRoll) {
+    // Captures and exact home arrivals grant an extra roll.
+    newState.consecutiveSixes = 0;
+    newState.diceValue = null;
+    newState.diceRolled = false;
+    newState.turnPhase = 'roll';
   } else {
     newState.consecutiveSixes = 0;
     advanceTurn(newState);
@@ -259,6 +317,14 @@ export function executeMove(state, playerIndex, tokenIndex) {
     newState.gameOver = true;
     newState.winner = playerIndex;
   }
+
+  newState.lastMove = {
+    player: playerIndex,
+    token: tokenIndex,
+    captured: captured || [],
+    reachedHome,
+    earnedBonusRoll,
+  };
 
   return newState;
 }
@@ -272,19 +338,20 @@ export function rollDiceForCurrent(state) {
   const value = rollDice();
   newState.diceValue = value;
   newState.diceRolled = true;
+  newState.lastDiceRoll = value;
+  newState.lastRollHadNoMove = false;
+  newState.lastRollForfeitedByThreeSixes = false;
 
   const movable = getMovableTokens(newState, newState.currentPlayer);
 
   if (movable.length === 0) {
     // No token can move — auto-advance turn
+    newState.lastRollHadNoMove = true;
     if (value === 6) {
       newState.consecutiveSixes++;
-      if (newState.consecutiveSixes >= 3) {
-        newState.consecutiveSixes = 0;
-        advanceTurn(newState);
-        return newState;
-      }
+      newState.lastRollForfeitedByThreeSixes = newState.consecutiveSixes >= 3;
     }
+    // Turn passes, so consecutive-six state must not leak to the next player.
     newState.consecutiveSixes = 0;
     advanceTurn(newState);
     return newState;

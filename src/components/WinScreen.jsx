@@ -20,7 +20,7 @@ export default function WinScreen() {
 
   // Fire confetti on mount
   useEffect(() => {
-    if (!winner || confettiDone.current) return;
+    if (winner === null || winner === undefined || confettiDone.current) return;
 
     confettiDone.current = true;
 
