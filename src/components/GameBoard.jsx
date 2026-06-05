@@ -374,7 +374,7 @@ export default function GameBoard() {
                               playerIndex={playerIndex}
                               tokenIndex={tokenIndex}
                               isActive={tok.isMovable}
-                              isClickable={tok.isMovable}
+                              isClickable={playerIndex === currentPlayer && gs.turnPhase === 'move'}
                               isInBase={tok.inBase}
                               isHome={tok.isHome}
                               stackIndex={idx}
