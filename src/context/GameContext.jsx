@@ -431,6 +431,7 @@ export function GameProvider({ children }) {
     playNotification();
   }, [effectivePlayerCount, saveSession]);
 
+
   /** Roll dice for current player (human only — bots auto-roll) */
   const rollDiceAction = useCallback(() => {
     const gs = stateRef.current.gameState;
@@ -474,6 +475,14 @@ export function GameProvider({ children }) {
       pushToast(`Rolled ${rolledValue}. No movable tokens. Turn passes.`, 'info', 1800, '⏭️');
     }
   }, [pushToast, scheduleAutoMove]);
+
+  // ────────────────────────────────────────────────
+  // AUTO-MOVE ENGINE (Human)
+  // ────────────────────────────────────────────────
+  // After rolling, if exactly 1 token is movable,
+  // auto-move it after a brief pause so the user
+  // can see the dice result.
+  const autoMoveTimerRef = useRef(null);
 
   /** Move a token (human only) */
   const moveToken = useCallback((tokenIndex) => {
@@ -609,41 +618,7 @@ export function GameProvider({ children }) {
     mpRef.current.sendTokenMove(tokenIndex, newState);
   }, [pushToast]);
 
-  // ────────────────────────────────────────────────
-  // AUTO-MOVE ENGINE (Human)
-  // ────────────────────────────────────────────────
-  // After rolling, if exactly 1 token is movable,
-  // auto-move it after a brief pause so the user
-  // can see the dice result.
-  const autoMoveTimerRef = useRef(null);
-  const scheduleAutoMove = useCallback((tokenIndex) => {
-    if (autoMoveTimerRef.current) clearTimeout(autoMoveTimerRef.current);
-    autoMoveTimerRef.current = setTimeout(() => {
-      moveToken(tokenIndex);
-    }, 350);
-  }, [moveToken]);
 
-  useEffect(() => {
-    const gs = stateRef.current.gameState;
-    if (!gs || gs.gameOver || gs.turnPhase !== 'move') return;
-
-    const currentIdx = gs.currentPlayer;
-    const playerInfo = stateRef.current.players[currentIdx];
-    if (!playerInfo || playerInfo.isBot) return;
-
-    const myId = mpRef.current.peerId;
-    if (playerInfo.id !== myId) return;
-
-    const movable = getMovableTokens(gs, currentIdx);
-    if (movable.length === 1) {
-      scheduleAutoMove(movable[0]);
-    }
-
-    return () => {
-      if (autoMoveTimerRef.current) clearTimeout(autoMoveTimerRef.current);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.gameState, scheduleAutoMove]);
 
   /** Send a chat message */
   const sendChat = useCallback((text) => {

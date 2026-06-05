@@ -362,15 +362,17 @@ export default function GameBoard() {
                         gap: '1px',
                       }}>
                         {tokensHere.map((tok, idx) => {
-                          const tokenKey = `${tok.player}-${tok.token}`;
+                          const playerIndex = Number.isInteger(tok.player) ? tok.player : 0;
+                          const tokenIndex = Number.isInteger(tok.token) ? tok.token : idx;
+                          const tokenKey = `${key}-${playerIndex}-${tokenIndex}`;
                           const isThisShaking = invalidShake &&
-                            invalidShake.player === tok.player &&
-                            invalidShake.token === tok.token;
+                            invalidShake.player === playerIndex &&
+                            invalidShake.token === tokenIndex;
                           return (
                             <Token
                               key={tokenKey}
-                              playerIndex={tok.player}
-                              tokenIndex={tok.token}
+                              playerIndex={playerIndex}
+                              tokenIndex={tokenIndex}
                               isActive={tok.isMovable}
                               isClickable={tok.isMovable}
                               isInBase={tok.inBase}
@@ -379,11 +381,11 @@ export default function GameBoard() {
                               stackCount={tokensHere.length}
                               invalidShakeKey={isThisShaking ? invalidShake?.key : null}
                               isAutoMove={isAutoMove && tok.isMovable}
-                              isAnimating={animatingToken?.player === tok.player && animatingToken?.token === tok.token}
-                              onClick={() => handleTokenClick(tok.player, tok.token)}
-                              onHover={() => tok.isMovable && setHoveredToken({ player: tok.player, token: tok.token })}
+                              isAnimating={animatingToken?.player === playerIndex && animatingToken?.token === tokenIndex}
+                              onClick={() => handleTokenClick(playerIndex, tokenIndex)}
+                              onHover={() => tok.isMovable && setHoveredToken({ player: playerIndex, token: tokenIndex })}
                               onUnhover={() => setHoveredToken(prev =>
-                                prev && prev.player === tok.player && prev.token === tok.token ? null : prev
+                                prev && prev.player === playerIndex && prev.token === tokenIndex ? null : prev
                               )}
                             />
                           );
