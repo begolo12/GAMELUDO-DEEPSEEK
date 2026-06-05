@@ -43,12 +43,26 @@ export default function useMultiplayer() {
   const connectionsRef = useRef([]);
   const peerRef = useRef(null);
   const messageHandlersRef = useRef(new Map());
+  const isHostRef = useRef(false); // Use ref instead of state in callbacks
 
   // ── Register a handler for incoming remote events ──
   const onRemoteEvent = useCallback((handler) => {
     const id = Symbol();
     messageHandlersRef.current.set(id, handler);
     return () => messageHandlersRef.current.delete(id);
+  }, []);
+
+  // ── Generate secure 5-digit room code using crypto ---
+  const generateRoomCode = useCallback(() => {
+    if (typeof window !== 'undefined' && window.crypto) {
+      const array = new Uint32Array(1);
+      window.crypto.getRandomValues(array);
+      // Generate number between 10000 and 99999
+      const num = 10000 + (array[0] % 90000);
+      return String(num);
+    }
+    // Fallback for older browsers
+    return String(Math.floor(10000 + Math.random() * 90000));
   }, []);
 
   // ── Cleanup ──
@@ -71,11 +85,6 @@ export default function useMultiplayer() {
     setRemoteEvents([]);
   }, []);
 
-  // ── Generate 5-digit room code ──
-  const generateRoomCode = useCallback(() => {
-    return String(Math.floor(10000 + Math.random() * 90000));
-  }, []);
-
   // ── Create a Peer (shared helper) ──
   const createPeer = useCallback((id) => {
     return new Peer(id, {
@@ -92,7 +101,7 @@ export default function useMultiplayer() {
       setConnections([...connectionsRef.current]);
 
       // Notify the new peer about existing connections
-      if (isHost) {
+      if (isHostRef.current) {
         // Send current player list
         broadcast({
           type: 'PLAYER_LIST',
@@ -155,6 +164,7 @@ export default function useMultiplayer() {
         setPeerId(id);
         setRoomCode(code);
         setIsHost(true);
+        isHostRef.current = true; // Sync ref with state
         setConnected(true);
         setMessages(prev => [...prev, {
           id: 'sys-1',
@@ -186,7 +196,15 @@ export default function useMultiplayer() {
   const joinRoom = useCallback(async (code, playerName = 'Player') => {
     cleanup();
     const fullId = ROOM_PREFIX + code;
-    const myId = ROOM_PREFIX + Date.now() + Math.random().toString(36).slice(2, 6);
+    // Generate random unique peer ID
+    let myId;
+    if (typeof window !== 'undefined' && window.crypto) {
+      const array = new Uint32Array(4);
+      window.crypto.getRandomValues(array);
+      myId = ROOM_PREFIX + array.join('');
+    } else {
+      myId = ROOM_PREFIX + Date.now() + Math.random().toString(36).slice(2, 6);
+    }
 
     return new Promise((resolve, reject) => {
       const p = createPeer(myId);
@@ -196,6 +214,7 @@ export default function useMultiplayer() {
         peerRef.current = p;
         setPeerId(id);
         setIsHost(false);
+        isHostRef.current = false; // Joiner is not host
 
         // Connect to host
         const conn = p.connect(fullId, { reliable: true });
@@ -203,6 +222,7 @@ export default function useMultiplayer() {
         conn.on('open', () => {
           setRoomCode(code);
           setConnected(true);
+          isHostRef.current = false; // Joiner is not host
 
           const connInfo = { id: conn.peer, conn };
           connectionsRef.current = [connInfo];
@@ -258,13 +278,14 @@ export default function useMultiplayer() {
     const msg = {
       type: 'CHAT',
       senderId: peerId,
-      senderName: isHost ? 'Host' : 'Player',
+      senderName: isHostRef.current ? 'Host' : 'Player',
       text,
       timestamp: Date.now(),
     };
-    setMessages(prev => [...prev, { ...msg, id: Date.now() + Math.random() }]);
+    // Cap messages to prevent unbounded growth
+    setMessages(prev => [...prev.slice(-99), { ...msg, id: Date.now() + Math.random() }]);
     broadcast(msg);
-  }, [peerId, isHost, broadcast]);
+  }, [peerId, broadcast]);
 
   // ── Send game state to all peers ──
   const sendGameState = useCallback((gameState) => {

@@ -13,6 +13,7 @@ import {
   createInitialState, executeMove, rollDiceForCurrent,
   getMovableTokens, getAIMove, getTokenCoords,
   ENTRY_POSITIONS, MAIN_TRACK, PLAYER_COLORS,
+  TOKENS_PER_PLAYER, HOME_ENTRY_STEP, MAX_CONSECUTIVE_SIXES,
 } from '../utils/gameLogic';
 import { playDiceRoll, playMove, playCapture, playHomeEntry, playWin, playNotification } from '../utils/sound';
 import useMultiplayer from '../hooks/useMultiplayer';
@@ -140,11 +141,53 @@ function buildPlayerList(humans, botCount) {
     list.push({ id: h.id, name: h.name || `Player ${i}`, color: i, isBot: false });
   });
   // Bots fill remaining slots
-  for (let b = 0; b < botCount && list.length < 4; b++) {
+  for (let b = 0; b < botCount && list.length < TOKENS_PER_PLAYER; b++) {
     const idx = list.length;
     list.push({ id: `bot-${b}`, name: BOT_NAMES[b] || `Bot ${b + 1}`, color: idx, isBot: true });
   }
   return list;
+}
+
+/**
+ * Validate remote game state before accepting it
+ * Prevents malicious or corrupted state synchronization
+ */
+function validateGameState(gameState) {
+  if (!gameState || typeof gameState !== 'object') return false;
+  
+  // Check required fields exist
+  const requiredFields = ['players', 'currentPlayer', 'diceValue', 'diceRolled', 
+                          'gameOver', 'winner', 'consecutiveSixes', 'turnPhase'];
+  for (const field of requiredFields) {
+    if (!(field in gameState)) return false;
+  }
+  
+  // Check player count consistency
+  const { players, playerCount } = gameState;
+  const actualCount = Object.keys(players).length;
+  if (actualCount !== playerCount || actualCount < 2 || actualCount > 4) return false;
+  
+  // Validate each player has exactly 4 tokens
+  for (const playerId in players) {
+    const player = players[playerId];
+    if (!player.tokens || !Array.isArray(player.tokens) || player.tokens.length !== TOKENS_PER_PLAYER) {
+      return false;
+    }
+    // Verify homeCount matches tokens in home
+    let homeCountCorrect = 0;
+    for (const token of player.tokens) {
+      if (token && token.steps >= HOME_ENTRY_STEP) homeCountCorrect++;
+    }
+    if (homeCountCorrect !== player.homeCount) return false;
+  }
+  
+  // Validate currentPlayer is within bounds
+  if (gameState.currentPlayer < 0 || gameState.currentPlayer >= playerCount) return false;
+  
+  // Validate consecutiveSixes
+  if (gameState.consecutiveSixes < 0 || gameState.consecutiveSixes > MAX_CONSECUTIVE_SIXES) return false;
+  
+  return true;
 }
 
 // ── Provider ──
@@ -181,25 +224,40 @@ export function GameProvider({ children }) {
   botThinkingRef.current = state.botThinking;
 
   // ── Handle remote events from WebRTC ──
+  const lastRemoteEventTime = useRef(0);
+  const REMOTE_EVENT_RATE_LIMIT_MS = 100; // Rate limit remote events
+
   useEffect(() => {
-    const unsub = mpRef.current.onRemoteEvent((msg) => {
+    const unsub = mpRef.current.onRemoteEvent((msg, conn) => {
+      // Rate limit: ignore events that come too quickly
+      const now = Date.now();
+      if (now - lastRemoteEventTime.current < REMOTE_EVENT_RATE_LIMIT_MS) return;
+      lastRemoteEventTime.current = now;
+
       if (msg.type === 'GAME_STATE') {
-        dispatch({ type: ACTIONS.SET_GAME_STATE, payload: msg.gameState });
+        // Host validates game state before accepting
+        if (mpRef.current.isHost || validateGameState(msg.gameState)) {
+          dispatch({ type: ACTIONS.SET_GAME_STATE, payload: msg.gameState });
+        }
       }
       if (msg.type === 'DICE_ROLL') {
         playDiceRoll();
       }
       if (msg.type === 'GAME_START') {
-        dispatch({ type: ACTIONS.SET_GAME_STATE, payload: msg.gameState });
-        dispatch({ type: ACTIONS.SET_GAME_STARTED, payload: true });
-        dispatch({ type: ACTIONS.SET_SCREEN, payload: 'game' });
-        if (msg.players) {
-          dispatch({ type: ACTIONS.SET_PLAYERS_LIST, payload: msg.players });
+        if (mpRef.current.isHost || validateGameState(msg.gameState)) {
+          dispatch({ type: ACTIONS.SET_GAME_STATE, payload: msg.gameState });
+          dispatch({ type: ACTIONS.SET_GAME_STARTED, payload: true });
+          dispatch({ type: ACTIONS.SET_SCREEN, payload: 'game' });
+          if (msg.players) {
+            dispatch({ type: ACTIONS.SET_PLAYERS_LIST, payload: msg.players });
+          }
+          playNotification();
         }
-        playNotification();
       }
       if (msg.type === 'TOKEN_MOVE') {
-        dispatch({ type: ACTIONS.SET_GAME_STATE, payload: msg.gameState });
+        if (mp.isHost || validateGameState(msg.gameState)) {
+          dispatch({ type: ACTIONS.SET_GAME_STATE, payload: msg.gameState });
+        }
       }
       if (msg.type === 'PLAYER_JOINED' || msg.type === 'PLAYER_LEFT') {
         playNotification();
@@ -493,6 +551,11 @@ export function GameProvider({ children }) {
     if (botTimerRef.current) clearTimeout(botTimerRef.current);
     dispatch({ type: ACTIONS.RESET });
     mpRef.current.cleanup();
+    // Clear animation timers
+    animTimersRef.current.forEach(t => clearTimeout(t));
+    animTimersRef.current = [];
+    // Return to lobby screen
+    dispatch({ type: ACTIONS.SET_SCREEN, payload: 'lobby' });
   }, []);
 
   // ────────────────────────────────────────────────

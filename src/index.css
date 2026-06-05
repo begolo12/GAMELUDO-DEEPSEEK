@@ -1535,6 +1535,16 @@ body::before {
   box-shadow: 0 0 8px rgba(61, 206, 138, 0.3);
 }
 
+/* Consecutive sixes indicator */
+.sixes-indicator {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 0.75rem;
+  margin-top: 2px;
+  animation: six-warn-pulse 0.8s ease-in-out infinite;
+}
+
 /* ---------- Consecutive Sixes Counter ---------- */
 .sixes-counter {
   display: flex;

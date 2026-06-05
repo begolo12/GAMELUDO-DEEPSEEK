@@ -266,6 +266,13 @@ export default function GameBoard() {
                 <span className={`pi-home-count ${homeCount === 4 ? 'full' : ''}`}>
                   🏠 {homeCount}/4
                 </span>
+                {/* Consecutive sixes indicator */}
+                {gs?.currentPlayer === i && gs?.consecutiveSixes > 0 && (
+                  <div className="sixes-indicator">
+                    {'🎲'.repeat(gs.consecutiveSixes)}
+                    {gs.consecutiveSixes >= 2 && <span style={{ color: '#ff3333', marginLeft: 4 }}>⚠️</span>}
+                  </div>
+                )}
                 <div className="pi-progress" aria-hidden="true">
                   <div className="pi-progress-fill" style={{ width: `${progressPct}%` }} />
                 </div>

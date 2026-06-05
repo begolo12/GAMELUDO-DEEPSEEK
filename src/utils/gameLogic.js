@@ -59,6 +59,15 @@ export const HOME_STRETCH = {
 
 export const CENTER_CELL = [7, 7];
 
+// ──────────────────────────────────────────────
+// GAME CONSTANTS (replaces magic numbers)
+// ──────────────────────────────────────────────
+export const MAIN_TRACK_LENGTH = 52;           // cells in the outer loop
+export const HOME_STRETCH_LENGTH = 6;          // cells per home stretch
+export const HOME_ENTRY_STEP = 58;             // steps needed to reach center
+export const TOKENS_PER_PLAYER = 4;            // tokens each player has
+export const MAX_CONSECUTIVE_SIXES = 3;        // max sixes before turn forfeit
+
 /**
  * Safe spots (absolute track indices). Tokens here cannot be captured.
  */
@@ -159,15 +168,15 @@ export function getMovableTokens(state, playerIndex) {
 export function canMoveToken(state, playerIndex, tokenIndex, dice) {
   const token = state.players[playerIndex].tokens[tokenIndex];
 
-  if (token?.steps >= 58) return false;    // already home
+  if (token?.steps >= HOME_ENTRY_STEP) return false;    // already home
   if (!token) {
     if (dice !== 6) return false;          // in base, need 6
     return !pathCrossesOpponentBlock(state, playerIndex, -1, 0);
   }
 
   const newSteps = token.steps + dice;
-  // Cannot overshoot centre (beyond step 58)
-  if (newSteps > 58) return false;
+  // Cannot overshoot centre (beyond HOME_ENTRY_STEP)
+  if (newSteps > HOME_ENTRY_STEP) return false;
 
   // Cannot pass through or land on an opponent block (2+ tokens of same colour)
   return !pathCrossesOpponentBlock(state, playerIndex, token.steps, newSteps);
@@ -187,8 +196,8 @@ function getPlayerBlockPositions(state, ownerIndex) {
   if (!owner) return new Set();
 
   for (const tok of owner.tokens) {
-    if (!tok || tok.steps >= 52) continue;
-    const absIdx = (ENTRY_POSITIONS[ownerIndex] + tok.steps) % 52;
+    if (!tok || tok.steps >= MAIN_TRACK_LENGTH) continue;
+    const absIdx = (ENTRY_POSITIONS[ownerIndex] + tok.steps) % MAIN_TRACK_LENGTH;
     counts.set(absIdx, (counts.get(absIdx) || 0) + 1);
   }
 
@@ -198,10 +207,12 @@ function getPlayerBlockPositions(state, ownerIndex) {
 }
 
 function pathCrossesOpponentBlock(state, playerIndex, fromSteps, toSteps) {
-  if (fromSteps >= 52) return false; // home stretch has no blocks
+  // No blocks in home stretch or after entry
+  if (fromSteps >= 52) return false;
 
-  const lastMainStep = Math.min(toSteps, 51);
-  if (lastMainStep < fromSteps + 1) return false;
+  // Only check main track cells (0-51)
+  const lastMainStep = Math.min(toSteps, MAIN_TRACK_LENGTH - 1);
+  if (lastMainStep <= fromSteps) return false; // won't cross any main track cells
 
   const opponentBlocks = new Set();
   for (let p = 0; p < state.playerCount; p++) {
@@ -212,7 +223,7 @@ function pathCrossesOpponentBlock(state, playerIndex, fromSteps, toSteps) {
   }
 
   for (let step = fromSteps + 1; step <= lastMainStep; step++) {
-    const absIdx = (ENTRY_POSITIONS[playerIndex] + step) % 52;
+    const absIdx = (ENTRY_POSITIONS[playerIndex] + step) % MAIN_TRACK_LENGTH;
     if (opponentBlocks.has(absIdx)) return true;
   }
   return false;
@@ -223,8 +234,8 @@ function pathCrossesOpponentBlock(state, playerIndex, fromSteps, toSteps) {
  * Only applies when token is on the main track (steps 0-51).
  */
 function checkCapture(state, playerIndex, steps) {
-  if (steps >= 52) return null;   // home stretch / home — no captures
-  const absIdx = (ENTRY_POSITIONS[playerIndex] + steps) % 52;
+  if (steps >= MAIN_TRACK_LENGTH) return null;   // home stretch / home — no captures
+  const absIdx = (ENTRY_POSITIONS[playerIndex] + steps) % MAIN_TRACK_LENGTH;
   if (SAFE_SPOTS.has(absIdx)) return null;
 
   const captures = [];
@@ -232,10 +243,10 @@ function checkCapture(state, playerIndex, steps) {
     if (p === playerIndex) continue;
     if (getPlayerBlockPositions(state, p).has(absIdx)) return null;
 
-    for (let t = 0; t < 4; t++) {
+    for (let t = 0; t < TOKENS_PER_PLAYER; t++) {
       const tok = state.players[p].tokens[t];
-      if (!tok || tok.steps >= 52) continue;   // not on main track
-      const otherAbs = (ENTRY_POSITIONS[p] + tok.steps) % 52;
+      if (!tok || tok.steps >= MAIN_TRACK_LENGTH) continue;   // not on main track
+      const otherAbs = (ENTRY_POSITIONS[p] + tok.steps) % MAIN_TRACK_LENGTH;
       if (otherAbs === absIdx) {
         captures.push({ player: p, token: t });
       }
@@ -270,10 +281,10 @@ export function executeMove(state, playerIndex, tokenIndex) {
     const newSteps = token.steps + dice;
     player.tokens[tokenIndex] = { steps: newSteps };
 
-    if (newSteps >= 58) {
+    if (newSteps >= HOME_ENTRY_STEP) {
       player.homeCount++;
       reachedHome = true;
-    } else if (newSteps < 52) {
+    } else if (newSteps < MAIN_TRACK_LENGTH) {
       // Still on main track — check capture
       captured = checkCapture(newState, playerIndex, newSteps);
     }
@@ -292,7 +303,7 @@ export function executeMove(state, playerIndex, tokenIndex) {
   // ── Advance turn ──
   if (dice === 6) {
     newState.consecutiveSixes++;
-    if (newState.consecutiveSixes >= 3) {
+    if (newState.consecutiveSixes >= MAX_CONSECUTIVE_SIXES) {
       // Three consecutive 6's — lose turn
       newState.consecutiveSixes = 0;
       advanceTurn(newState);
