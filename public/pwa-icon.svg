@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Ludo Multiplayer icon">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#101428"/>
+      <stop offset="0.5" stop-color="#28104f"/>
+      <stop offset="1" stop-color="#052e3f"/>
+    </linearGradient>
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="10" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <rect width="512" height="512" rx="96" fill="url(#bg)"/>
+  <circle cx="256" cy="256" r="198" fill="none" stroke="#00f5ff" stroke-width="10" opacity="0.55"/>
+  <circle cx="256" cy="256" r="150" fill="none" stroke="#ff2bd6" stroke-width="8" opacity="0.45"/>
+  <g filter="url(#glow)">
+    <rect x="150" y="150" width="212" height="212" rx="44" fill="#f8fbff" stroke="#00f5ff" stroke-width="10"/>
+    <circle cx="205" cy="205" r="20" fill="#ff2b4f"/>
+    <circle cx="256" cy="256" r="20" fill="#7c3cff"/>
+    <circle cx="311" cy="311" r="20" fill="#00b86b"/>
+    <circle cx="311" cy="205" r="20" fill="#ffcc00"/>
+    <circle cx="205" cy="311" r="20" fill="#00a8ff"/>
+  </g>
+  <path d="M256 78l22 44 49 7-36 34 9 49-44-23-44 23 9-49-36-34 49-7z" fill="#ffcc00" opacity="0.95"/>
+</svg>
