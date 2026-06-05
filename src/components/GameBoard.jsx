@@ -99,6 +99,7 @@ export default function GameBoard() {
     diceHistory,
     invalidShake,
     animatingToken,
+    resetGame,
   } = useGame();
 
   // ── Hover preview state ──
@@ -252,6 +253,10 @@ export default function GameBoard() {
             {isBotTurn ? ' 🤖' : ''}
           </span>
           {botThinking && <span className="turn-thinking">🧠 thinking...</span>}
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button className="btn btn-secondary" onClick={resetGame}>Stop Game</button>
+          <button className="btn btn-danger" onClick={resetGame}>Leave Game</button>
         </div>
         {gs.consecutiveSixes > 0 && (
           <div className="sixes-counter" title={`Consecutive sixes: ${gs.consecutiveSixes}/3`}>

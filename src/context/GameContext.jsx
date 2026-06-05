@@ -231,6 +231,24 @@ export function GameProvider({ children }) {
   stateRef.current = state;
   const botTimerRef = useRef(null);
   const animTimersRef = useRef([]);     // per-step animation timers
+  const sessionRestoreRef = useRef(false);
+
+  const saveSession = useCallback((patch = {}) => {
+    if (typeof window === 'undefined') return;
+    const payload = {
+      roomCode: stateRef.current.roomCode,
+      playerName: stateRef.current.playerName,
+      isHost: stateRef.current.isHost,
+      screen: stateRef.current.screen,
+      ...patch,
+    };
+    sessionStorage.setItem('ludo-session', JSON.stringify(payload));
+  }, []);
+
+  const clearSession = useCallback(() => {
+    if (typeof window === 'undefined') return;
+    sessionStorage.removeItem('ludo-session');
+  }, []);
 
   // ── Compute effective humans list from WebRTC ──
   const humanCount = mp.allPeers?.length ?? 0;
@@ -246,6 +264,34 @@ export function GameProvider({ children }) {
     const merged = buildPlayerList(humans, stateRef.current.botCount);
     dispatch({ type: ACTIONS.SET_PLAYERS_LIST, payload: merged });
   }, [mp.allPeers, state.botCount, state.gameStarted]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (state.gameStarted || state.screen !== 'game') {
+      saveSession();
+    }
+  }, [state.gameStarted, state.screen, saveSession]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || sessionRestoreRef.current) return;
+    sessionRestoreRef.current = true;
+    const raw = sessionStorage.getItem('ludo-session');
+    if (!raw) return;
+    try {
+      const saved = JSON.parse(raw);
+      if (saved.playerName) dispatch({ type: ACTIONS.SET_PLAYER_NAME, payload: saved.playerName });
+      if (saved.roomCode) dispatch({ type: ACTIONS.SET_ROOM_CODE, payload: saved.roomCode });
+      if (saved.screen) dispatch({ type: ACTIONS.SET_SCREEN, payload: saved.screen });
+      if (saved.isHost) dispatch({ type: ACTIONS.SET_LOADING, payload: false });
+      if (saved.roomCode && saved.screen === 'game') {
+        if (saved.isHost) {
+          mpRef.current.createRoom(saved.playerName || 'Host', saved.roomCode).catch(() => {});
+        } else {
+          mpRef.current.joinRoom(saved.roomCode, saved.playerName || 'Player').catch(() => {});
+        }
+      }
+    } catch {}
+  }, [saveSession]);
 
   // Total effective players (humans + bots, at least 2 for the game to start)
   const effectivePlayerCount = Math.max(2, Math.min(4, humanCount + state.botCount));
@@ -294,6 +340,17 @@ export function GameProvider({ children }) {
       }
       if (msg.type === 'PLAYER_JOINED' || msg.type === 'PLAYER_LEFT') {
         playNotification();
+      }
+
+      if (msg.type === 'PLAYER_LEFT') {
+        const alive = mpRef.current.allPeers?.length ?? 0;
+        const activePlayers = stateRef.current.players.filter(p => p && !p.isBot).length;
+        if (mpRef.current.isHost && stateRef.current.gameStarted && activePlayers <= 1 && alive <= 1) {
+          dispatch({ type: ACTIONS.SET_GAME_STATE, payload: { ...stateRef.current.gameState, gameOver: true, winner: 0 } });
+          dispatch({ type: ACTIONS.SET_SCREEN, payload: 'game' });
+          playWin();
+          pushToast('Only 1 player left. Game over.', 'win', 4000, '🏆');
+        }
       }
     });
     return unsub;
@@ -367,9 +424,10 @@ export function GameProvider({ children }) {
     dispatch({ type: ACTIONS.SET_GAME_STATE, payload: gameState });
     dispatch({ type: ACTIONS.SET_GAME_STARTED, payload: true });
     dispatch({ type: ACTIONS.SET_SCREEN, payload: 'game' });
+    saveSession({ screen: 'game' });
     mpRef.current.sendGameStart(gameState, stateRef.current.players);
     playNotification();
-  }, [effectivePlayerCount]);
+  }, [effectivePlayerCount, saveSession]);
 
   /** Roll dice for current player (human only — bots auto-roll) */
   const rollDiceAction = useCallback(() => {
@@ -582,6 +640,7 @@ export function GameProvider({ children }) {
   /** Reset the game */
   const resetGame = useCallback(() => {
     if (botTimerRef.current) clearTimeout(botTimerRef.current);
+    clearSession();
     dispatch({ type: ACTIONS.RESET });
     mpRef.current.cleanup();
     // Clear animation timers
@@ -589,7 +648,7 @@ export function GameProvider({ children }) {
     animTimersRef.current = [];
     // Return to lobby screen
     dispatch({ type: ACTIONS.SET_SCREEN, payload: 'lobby' });
-  }, []);
+  }, [clearSession]);
 
   // ────────────────────────────────────────────────
   // BOT AUTO-PLAY ENGINE

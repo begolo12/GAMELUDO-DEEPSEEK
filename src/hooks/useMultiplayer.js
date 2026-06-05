@@ -66,7 +66,7 @@ export default function useMultiplayer() {
   }, []);
 
   // ── Cleanup ──
-  const cleanup = useCallback(() => {
+  const cleanup = useCallback((keepRoomState = false) => {
     connectionsRef.current.forEach(({ conn }) => {
       try { conn.close(); } catch {}
     });
@@ -78,11 +78,13 @@ export default function useMultiplayer() {
     }
     setPeer(null);
     setPeerId(null);
-    setRoomCode(null);
-    setIsHost(false);
+    if (!keepRoomState) {
+      setRoomCode(null);
+      setIsHost(false);
+      setMessages([]);
+      setRemoteEvents([]);
+    }
     setConnected(false);
-    setMessages([]);
-    setRemoteEvents([]);
   }, []);
 
   // ── Create a Peer (shared helper) ──
@@ -150,9 +152,9 @@ export default function useMultiplayer() {
   }, [isHost]);
 
   // ── HOST: Create room ──
-  const createRoom = useCallback(async (playerName = 'Host') => {
+  const createRoom = useCallback(async (playerName = 'Host', forcedCode = null) => {
     cleanup();
-    const code = generateRoomCode();
+    const code = forcedCode || generateRoomCode();
     const fullId = ROOM_PREFIX + code;
 
     return new Promise((resolve, reject) => {
