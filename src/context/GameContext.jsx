@@ -250,6 +250,12 @@ export function GameProvider({ children }) {
     sessionStorage.removeItem('ludo-session');
   }, []);
 
+  // ── Stable refs for values that change every render ──
+  const mpRef = useRef(mp);
+  mpRef.current = mp;
+  const botThinkingRef = useRef(state.botThinking);
+  botThinkingRef.current = state.botThinking;
+
   // ── Compute effective humans list from WebRTC ──
   const humanCount = mp.allPeers?.length ?? 0;
 
@@ -282,25 +288,17 @@ export function GameProvider({ children }) {
       if (saved.playerName) dispatch({ type: ACTIONS.SET_PLAYER_NAME, payload: saved.playerName });
       if (saved.roomCode) dispatch({ type: ACTIONS.SET_ROOM_CODE, payload: saved.roomCode });
       if (saved.screen) dispatch({ type: ACTIONS.SET_SCREEN, payload: saved.screen });
-      if (saved.isHost) dispatch({ type: ACTIONS.SET_LOADING, payload: false });
       if (saved.roomCode && saved.screen === 'game') {
-        if (saved.isHost) {
-          mpRef.current.createRoom(saved.playerName || 'Host', saved.roomCode).catch(() => {});
-        } else {
-          mpRef.current.joinRoom(saved.roomCode, saved.playerName || 'Player').catch(() => {});
-        }
+        const restore = saved.isHost
+          ? mpRef.current.createRoom(saved.playerName || 'Host', saved.roomCode)
+          : mpRef.current.joinRoom(saved.roomCode, saved.playerName || 'Player');
+        restore.catch(() => {});
       }
     } catch {}
   }, [saveSession]);
 
   // Total effective players (humans + bots, at least 2 for the game to start)
   const effectivePlayerCount = Math.max(2, Math.min(4, humanCount + state.botCount));
-
-  // ── Stable refs for values that change every render ──
-  const mpRef = useRef(mp);
-  mpRef.current = mp;
-  const botThinkingRef = useRef(state.botThinking);
-  botThinkingRef.current = state.botThinking;
 
   // ── Handle remote events from WebRTC ──
   const lastRemoteEventTime = useRef(0);
@@ -638,11 +636,11 @@ export function GameProvider({ children }) {
   }, []);
 
   /** Reset the game */
-  const resetGame = useCallback(() => {
+  const resetGame = useCallback((options = {}) => {
     if (botTimerRef.current) clearTimeout(botTimerRef.current);
-    clearSession();
+    if (options.clearSession !== false) clearSession();
     dispatch({ type: ACTIONS.RESET });
-    mpRef.current.cleanup();
+    mpRef.current.cleanup(Boolean(options.keepRoom));
     // Clear animation timers
     animTimersRef.current.forEach(t => clearTimeout(t));
     animTimersRef.current = [];
