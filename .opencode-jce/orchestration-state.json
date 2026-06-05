@@ -1,0 +1,19 @@
+{
+  "version": 2,
+  "updatedAt": "2026-06-04T19:26:24.895Z",
+  "facts": [],
+  "decisions": [],
+  "artifacts": [],
+  "evidence": [],
+  "wisdom": [],
+  "taskLearnings": [],
+  "sessionHistory": [
+    {
+      "id": "session-1780597567971-pwa3",
+      "startedAt": "2026-06-04T18:26:07.971Z",
+      "nodesCompleted": 0,
+      "nodesFailed": 0,
+      "endedAt": "2026-06-04T19:26:24.895Z"
+    }
+  ]
+}

@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "updatedAt": "2026-06-04T19:26:24.894Z",
+  "activeTasks": [],
+  "completedSummaries": [],
+  "blockers": [],
+  "verificationEvidence": [],
+  "retryHistory": [],
+  "traceEvents": [],
+  "workflowRuns": [],
+  "wisdom": [],
+  "taskLearnings": [],
+  "activeWorkflow": {
+    "id": "workflow-1780597676380",
+    "goal": "<path>C:\\Users\\irvan\\Documents\\GAMELUDO-DEEPSEEK\\ludo-multiplayer</path>\n<type>directory</type>\n<entries>\n.git/\n.gitignore\n.opencode-context.md\n.opencode-jce/\n.vercel/\nDEPLOY.md\ndist/\nindex.html\nnode_modules/\npackage-lock.json\npackage.json\n",
+    "status": "planning",
+    "createdAt": "2026-06-04T18:27:56.380Z",
+    "updatedAt": "2026-06-04T18:55:49.095Z",
+    "steps": [],
+    "acceptanceCriteria": [],
+    "evidence": [],
+    "retryPolicy": {
+      "maxRetries": 1
+    },
+    "completionGate": {
+      "status": "pending",
+      "reasons": []
+    },
+    "route": {
+      "intent": "review",
+      "skills": [
+        "software-engineering",
+        "codebase-intelligence",
+        "react"
+      ],
+      "reason": "Matched keywords: check",
+      "agentHint": "frontend",
+      "source": "message"
+    }
+  }
+}
