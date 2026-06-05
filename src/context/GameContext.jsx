@@ -407,6 +407,17 @@ export function GameProvider({ children }) {
     }, duration);
   }, []);
 
+  // ── Auto-move engine (human) ──
+  const autoMoveTimerRef = useRef(null);
+  const scheduleAutoMove = useCallback((tokenIndex) => {
+    if (autoMoveTimerRef.current) clearTimeout(autoMoveTimerRef.current);
+    autoMoveTimerRef.current = setTimeout(() => {
+      const gs = stateRef.current.gameState;
+      if (!gs || gs.gameOver || gs.turnPhase !== 'move') return;
+      moveToken(tokenIndex);
+    }, 220);
+  }, []);
+
   // ── Toggle sound on/off ──
   const toggleSound = useCallback(() => {
     dispatch({ type: ACTIONS.SET_SOUND_ENABLED, payload: !stateRef.current.soundEnabled });
@@ -475,14 +486,6 @@ export function GameProvider({ children }) {
       pushToast(`Rolled ${rolledValue}. No movable tokens. Turn passes.`, 'info', 1800, '⏭️');
     }
   }, [pushToast, scheduleAutoMove]);
-
-  // ────────────────────────────────────────────────
-  // AUTO-MOVE ENGINE (Human)
-  // ────────────────────────────────────────────────
-  // After rolling, if exactly 1 token is movable,
-  // auto-move it after a brief pause so the user
-  // can see the dice result.
-  const autoMoveTimerRef = useRef(null);
 
   /** Move a token (human only) */
   const moveToken = useCallback((tokenIndex) => {
