@@ -72,6 +72,21 @@ function computeDestCoords(currentToken, playerIndex, dice, playerCount) {
   return MAIN_TRACK[absIdx];
 }
 
+function computePreviewPath(currentToken, playerIndex, dice) {
+  if (!Number.isInteger(dice) || dice < 1) return [];
+  if (!currentToken) return [MAIN_TRACK[ENTRY_POSITIONS[playerIndex]]];
+
+  const cells = [];
+  const start = currentToken.steps;
+  const end = Math.min(58, start + dice);
+  for (let step = start + 1; step <= end; step++) {
+    if (step >= 58) cells.push(CENTER_CELL);
+    else if (step >= 52) cells.push(HOME_STRETCH[playerIndex][step - 52]);
+    else cells.push(MAIN_TRACK[(ENTRY_POSITIONS[playerIndex] + step) % 52]);
+  }
+  return cells;
+}
+
 export default function GameBoard() {
   const {
     gameState,
@@ -201,12 +216,21 @@ export default function GameBoard() {
   let previewCoords = null;
   let previewColor = null;
   let previewStrong = false;
+  let previewPath = [];
   if (hoveredToken && isMyTurn && gs.turnPhase === 'move' && movableTokens.includes(hoveredToken.token)) {
     const tok = gs.players[hoveredToken.player].tokens[hoveredToken.token];
     previewCoords = computeDestCoords(tok, hoveredToken.player, gs.diceValue, gs.playerCount);
+    previewPath = computePreviewPath(tok, hoveredToken.player, gs.diceValue);
     previewColor = PLAYER_COLORS[hoveredToken.player]?.hex;
     previewStrong = true;
   }
+  const actionText = isBotTurn
+    ? `${players[currentPlayer]?.name || 'Bot'} sedang jalan...`
+    : isMyTurn && gs.turnPhase === 'roll'
+      ? 'Giliran kamu: tekan Roll atau Space'
+      : isMyTurn && gs.turnPhase === 'move'
+        ? `Pilih token bergerak ${gs.diceValue} langkah`
+        : `Menunggu ${players[currentPlayer]?.name || 'pemain lain'}`;
 
   return (
     <div className="game-container">
@@ -239,6 +263,9 @@ export default function GameBoard() {
             ))}
           </div>
         )}
+        <div className="action-banner" aria-live="polite">
+          {actionText}
+        </div>
       </div>
 
       {/* Main layout */}
@@ -291,6 +318,7 @@ export default function GameBoard() {
                 const cellType = getCellType(row, col);
                 const isStack = stackCells.has(key);
                 const isPreview = previewCoords && previewCoords[0] === row && previewCoords[1] === col;
+                const previewTrailIndex = previewPath.findIndex(([r, c]) => r === row && c === col);
 
                 const baseClass = cellClassName(row, col);
                 const finalClass = isStack ? `${baseClass} cell-has-stack` : baseClass;
@@ -305,6 +333,12 @@ export default function GameBoard() {
                       } : {}),
                     }}
                   >
+                    {previewTrailIndex >= 0 && !isPreview && (
+                      <div
+                        className="move-preview-trail"
+                        style={{ color: previewColor, animationDelay: `${previewTrailIndex * 45}ms` }}
+                      />
+                    )}
                     {isPreview && (
                       <div
                         className={`move-preview ${previewStrong ? 'move-preview-strong' : ''}`}

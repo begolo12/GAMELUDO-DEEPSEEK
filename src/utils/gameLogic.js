@@ -138,14 +138,14 @@ export function createInitialState(playerCount = 4) {
  * @returns {[number, number] | null}
  */
 export function getTokenCoords(token, playerIndex) {
-  if (!token) return null;                         // in base
-  if (token.steps >= 58) return CENTER_CELL;       // home
-  if (token.steps >= 52) {
+  if (!token) return null;                                  // in base
+  if (token.steps >= HOME_ENTRY_STEP) return CENTER_CELL;   // home
+  if (token.steps >= MAIN_TRACK_LENGTH) {
     // On home stretch: steps 52 → idx 0, 53 → idx 1, …, 57 → idx 5
-    return HOME_STRETCH[playerIndex][token.steps - 52];
+    return HOME_STRETCH[playerIndex][token.steps - MAIN_TRACK_LENGTH];
   }
   // On main track: absolute index = (entry + steps) % 52
-  const absIdx = (ENTRY_POSITIONS[playerIndex] + token.steps) % 52;
+  const absIdx = (ENTRY_POSITIONS[playerIndex] + token.steps) % MAIN_TRACK_LENGTH;
   return MAIN_TRACK[absIdx];
 }
 
@@ -157,7 +157,7 @@ export function getMovableTokens(state, playerIndex) {
   const player = state.players[playerIndex];
   const dice = state.diceValue;
   const movable = [];
-  for (let t = 0; t < 4; t++) {
+  for (let t = 0; t < TOKENS_PER_PLAYER; t++) {
     if (canMoveToken(state, playerIndex, t, dice)) {
       movable.push(t);
     }
@@ -166,20 +166,21 @@ export function getMovableTokens(state, playerIndex) {
 }
 
 export function canMoveToken(state, playerIndex, tokenIndex, dice) {
+  if (!Number.isInteger(dice) || dice < 1 || dice > 6) return false;
   const token = state.players[playerIndex].tokens[tokenIndex];
 
   if (token?.steps >= HOME_ENTRY_STEP) return false;    // already home
   if (!token) {
     if (dice !== 6) return false;          // in base, need 6
-    return !pathCrossesOpponentBlock(state, playerIndex, -1, 0);
+    return !pathCrossesBlock(state, playerIndex, tokenIndex, -1, 0);
   }
 
   const newSteps = token.steps + dice;
   // Cannot overshoot centre (beyond HOME_ENTRY_STEP)
   if (newSteps > HOME_ENTRY_STEP) return false;
 
-  // Cannot pass through or land on an opponent block (2+ tokens of same colour)
-  return !pathCrossesOpponentBlock(state, playerIndex, token.steps, newSteps);
+  // Cannot pass through or land on a block (2+ tokens of same colour)
+  return !pathCrossesBlock(state, playerIndex, tokenIndex, token.steps, newSteps);
 }
 
 // ──────────────────────────────────────────────
@@ -206,25 +207,31 @@ function getPlayerBlockPositions(state, ownerIndex) {
     .map(([absIdx]) => absIdx));
 }
 
-function pathCrossesOpponentBlock(state, playerIndex, fromSteps, toSteps) {
+function pathCrossesBlock(state, playerIndex, tokenIndex, fromSteps, toSteps) {
   // No blocks in home stretch or after entry
-  if (fromSteps >= 52) return false;
+  if (fromSteps >= MAIN_TRACK_LENGTH) return false;
 
   // Only check main track cells (0-51)
   const lastMainStep = Math.min(toSteps, MAIN_TRACK_LENGTH - 1);
   if (lastMainStep <= fromSteps) return false; // won't cross any main track cells
 
-  const opponentBlocks = new Set();
+  const blockedAbs = new Set();
   for (let p = 0; p < state.playerCount; p++) {
-    if (p === playerIndex) continue;
     for (const absIdx of getPlayerBlockPositions(state, p)) {
-      opponentBlocks.add(absIdx);
+      blockedAbs.add(absIdx);
     }
   }
 
+  const movingStartAbs = fromSteps >= 0
+    ? (ENTRY_POSITIONS[playerIndex] + fromSteps) % MAIN_TRACK_LENGTH
+    : null;
+
   for (let step = fromSteps + 1; step <= lastMainStep; step++) {
     const absIdx = (ENTRY_POSITIONS[playerIndex] + step) % MAIN_TRACK_LENGTH;
-    if (opponentBlocks.has(absIdx)) return true;
+
+    // Owner may break a block by moving one token out of its current blocked cell.
+    // Other tokens may not pass or land on any block, including own blocks.
+    if (blockedAbs.has(absIdx) && absIdx !== movingStartAbs) return true;
   }
   return false;
 }
@@ -302,16 +309,11 @@ export function executeMove(state, playerIndex, tokenIndex) {
 
   // ── Advance turn ──
   if (dice === 6) {
-    newState.consecutiveSixes++;
-    if (newState.consecutiveSixes >= MAX_CONSECUTIVE_SIXES) {
-      // Three consecutive 6's — lose turn
-      newState.consecutiveSixes = 0;
-      advanceTurn(newState);
-    } else {
-      newState.diceValue = null;
-      newState.diceRolled = false;
-      newState.turnPhase = 'roll';
-    }
+    // rollDiceForCurrent already increments consecutiveSixes.
+    // A third 6 is forfeited immediately before move phase, so moving here means extra roll is legal.
+    newState.diceValue = null;
+    newState.diceRolled = false;
+    newState.turnPhase = 'roll';
   } else if (earnedBonusRoll) {
     // Captures and exact home arrivals grant an extra roll.
     newState.consecutiveSixes = 0;
@@ -353,15 +355,21 @@ export function rollDiceForCurrent(state) {
   newState.lastRollHadNoMove = false;
   newState.lastRollForfeitedByThreeSixes = false;
 
+  if (value === 6) {
+    newState.consecutiveSixes++;
+    if (newState.consecutiveSixes >= MAX_CONSECUTIVE_SIXES) {
+      newState.lastRollForfeitedByThreeSixes = true;
+      newState.consecutiveSixes = 0;
+      advanceTurn(newState);
+      return newState;
+    }
+  }
+
   const movable = getMovableTokens(newState, newState.currentPlayer);
 
   if (movable.length === 0) {
     // No token can move — auto-advance turn
     newState.lastRollHadNoMove = true;
-    if (value === 6) {
-      newState.consecutiveSixes++;
-      newState.lastRollForfeitedByThreeSixes = newState.consecutiveSixes >= 3;
-    }
     // Turn passes, so consecutive-six state must not leak to the next player.
     newState.consecutiveSixes = 0;
     advanceTurn(newState);
@@ -465,10 +473,10 @@ export function getAIMove(state, playerIndex) {
     // ── Token is in base — rolling 6 to enter ──
     if (!token) {
       // Bringing a token out is always good if we have fewer than 4 out
-      const onTrack = player.tokens.filter(tok => tok !== null && tok.steps < 58).length;
+      const onTrack = player.tokens.filter(tok => tok !== null && tok.steps < HOME_ENTRY_STEP).length;
       score += 25;
       // Better to bring out if we have few tokens on the board
-      score += (3 - onTrack) * 5;
+      score += (TOKENS_PER_PLAYER - 1 - onTrack) * 5;
       if (onTrack === 0) score += 10; // First token is extra important
     }
     //
@@ -477,15 +485,15 @@ export function getAIMove(state, playerIndex) {
       const newSteps = token.steps + dice;
 
       // --- PRIORITY 1: Capture opponent ---
-      if (token.steps < 52 && newSteps < 52) {
-        const newAbs = (ENTRY_POSITIONS[playerIndex] + newSteps) % 52;
+      if (token.steps < MAIN_TRACK_LENGTH && newSteps < MAIN_TRACK_LENGTH) {
+        const newAbs = (ENTRY_POSITIONS[playerIndex] + newSteps) % MAIN_TRACK_LENGTH;
         if (!SAFE_SPOTS.has(newAbs)) {
           for (let p = 0; p < state.playerCount; p++) {
             if (p === playerIndex) continue;
-            for (let ot = 0; ot < 4; ot++) {
+            for (let ot = 0; ot < TOKENS_PER_PLAYER; ot++) {
               const otok = state.players[p].tokens[ot];
-              if (otok && otok.steps < 52) {
-                const oAbs = (ENTRY_POSITIONS[p] + otok.steps) % 52;
+              if (otok && otok.steps < MAIN_TRACK_LENGTH) {
+                const oAbs = (ENTRY_POSITIONS[p] + otok.steps) % MAIN_TRACK_LENGTH;
                 if (oAbs === newAbs) {
                   score += 150; // Capture!
                 }
@@ -496,16 +504,16 @@ export function getAIMove(state, playerIndex) {
       }
 
       // --- PRIORITY 2: Reaching home (winning move) ---
-      if (newSteps >= 58) {
+      if (newSteps >= HOME_ENTRY_STEP) {
         score += 200;
       }
       // --- Moving forward on home stretch ---
-      else if (token.steps >= 52) {
+      else if (token.steps >= MAIN_TRACK_LENGTH) {
         score += 60;
-        score += (58 - newSteps) * 4; // Closer to centre = better
+        score += (newSteps - MAIN_TRACK_LENGTH + 1) * 6; // Closer to centre = better
       }
       // --- Entering home stretch ---
-      else if (newSteps >= 52) {
+      else if (newSteps >= MAIN_TRACK_LENGTH) {
         score += 50;
       }
 
@@ -513,8 +521,8 @@ export function getAIMove(state, playerIndex) {
       score += token.steps * 0.3;
 
       // --- Safe spot landing ---
-      if (newSteps < 52) {
-        const newAbs = (ENTRY_POSITIONS[playerIndex] + newSteps) % 52;
+      if (newSteps < MAIN_TRACK_LENGTH) {
+        const newAbs = (ENTRY_POSITIONS[playerIndex] + newSteps) % MAIN_TRACK_LENGTH;
         if (SAFE_SPOTS.has(newAbs)) {
           score += 12;
         }

@@ -61,6 +61,17 @@ export default function Token({
       onMouseEnter={onHover}
       onMouseLeave={onUnhover}
       onTouchStart={onHover}
+      role="button"
+      tabIndex={isClickable ? 0 : -1}
+      aria-disabled={!isClickable}
+      aria-label={`Player ${playerIndex + 1} token ${tokenIndex + 1}${isClickable ? ', movable' : ''}`}
+      onKeyDown={(e) => {
+        if (!isClickable) return;
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onClick?.();
+        }
+      }}
       title={`Player ${playerIndex + 1} — Token ${tokenIndex + 1}`}
       style={{
         cursor: isClickable ? 'pointer' : 'default',

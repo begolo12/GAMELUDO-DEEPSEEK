@@ -12,8 +12,8 @@ import React, { createContext, useContext, useReducer, useCallback, useEffect, u
 import {
   createInitialState, executeMove, rollDiceForCurrent,
   getMovableTokens, getAIMove, getTokenCoords,
-  ENTRY_POSITIONS, MAIN_TRACK, PLAYER_COLORS,
-  TOKENS_PER_PLAYER, HOME_ENTRY_STEP, MAX_CONSECUTIVE_SIXES,
+  ENTRY_POSITIONS, MAIN_TRACK, PLAYER_COLORS, SAFE_SPOTS,
+  TOKENS_PER_PLAYER, HOME_ENTRY_STEP, MAX_CONSECUTIVE_SIXES, MAIN_TRACK_LENGTH,
 } from '../utils/gameLogic';
 import { playDiceRoll, playMove, playCapture, playHomeEntry, playWin, playNotification } from '../utils/sound';
 import useMultiplayer from '../hooks/useMultiplayer';
@@ -157,35 +157,68 @@ function validateGameState(gameState) {
   
   // Check required fields exist
   const requiredFields = ['players', 'currentPlayer', 'diceValue', 'diceRolled', 
-                          'gameOver', 'winner', 'consecutiveSixes', 'turnPhase'];
+                          'gameOver', 'winner', 'consecutiveSixes', 'turnPhase', 'playerCount'];
   for (const field of requiredFields) {
     if (!(field in gameState)) return false;
   }
   
   // Check player count consistency
   const { players, playerCount } = gameState;
-  const actualCount = Object.keys(players).length;
-  if (actualCount !== playerCount || actualCount < 2 || actualCount > 4) return false;
+  if (!Number.isInteger(playerCount)) return false;
+  const playerIds = Object.keys(players || {});
+  const actualCount = playerIds.length;
+  if (actualCount !== playerCount || actualCount < 2 || actualCount > TOKENS_PER_PLAYER) return false;
+  
+  // Validate currentPlayer is within bounds
+  if (!Number.isInteger(gameState.currentPlayer) || gameState.currentPlayer < 0 || gameState.currentPlayer >= playerCount) return false;
+
+  // Validate dice and turn phase
+  const validDice = gameState.diceValue === null || (Number.isInteger(gameState.diceValue) && gameState.diceValue >= 1 && gameState.diceValue <= 6);
+  if (!validDice) return false;
+  if (!['roll', 'move'].includes(gameState.turnPhase)) return false;
+  if (typeof gameState.diceRolled !== 'boolean') return false;
+  if (gameState.turnPhase === 'move' && gameState.diceValue === null) return false;
+  if (gameState.turnPhase === 'roll' && gameState.diceRolled && gameState.diceValue === null) return false;
+  if (typeof gameState.gameOver !== 'boolean') return false;
+  if (!(gameState.winner === null || (Number.isInteger(gameState.winner) && gameState.winner >= 0 && gameState.winner < playerCount))) return false;
+  
+  // Validate consecutiveSixes
+  if (!Number.isInteger(gameState.consecutiveSixes) || gameState.consecutiveSixes < 0 || gameState.consecutiveSixes >= MAX_CONSECUTIVE_SIXES) return false;
+
+  const mainOccupancy = new Map();
   
   // Validate each player has exactly 4 tokens
-  for (const playerId in players) {
+  for (const playerId of playerIds) {
+    const p = Number(playerId);
+    if (!Number.isInteger(p) || p < 0 || p >= playerCount) return false;
     const player = players[playerId];
-    if (!player.tokens || !Array.isArray(player.tokens) || player.tokens.length !== TOKENS_PER_PLAYER) {
+    if (!player || !player.tokens || !Array.isArray(player.tokens) || player.tokens.length !== TOKENS_PER_PLAYER) {
       return false;
     }
-    // Verify homeCount matches tokens in home
+    if (!Number.isInteger(player.homeCount) || player.homeCount < 0 || player.homeCount > TOKENS_PER_PLAYER) return false;
+
+    // Verify homeCount matches tokens in home and token steps stay legal.
     let homeCountCorrect = 0;
     for (const token of player.tokens) {
-      if (token && token.steps >= HOME_ENTRY_STEP) homeCountCorrect++;
+      if (token === null) continue;
+      if (!token || typeof token !== 'object') return false;
+      if (!Number.isInteger(token.steps) || token.steps < 0 || token.steps > HOME_ENTRY_STEP) return false;
+      if (token.steps >= HOME_ENTRY_STEP) homeCountCorrect++;
+
+      if (token.steps < MAIN_TRACK_LENGTH) {
+        const absIdx = (ENTRY_POSITIONS[p] + token.steps) % MAIN_TRACK_LENGTH;
+        const key = String(absIdx);
+        if (!mainOccupancy.has(key)) mainOccupancy.set(key, new Set());
+        mainOccupancy.get(key).add(p);
+      }
     }
     if (homeCountCorrect !== player.homeCount) return false;
   }
-  
-  // Validate currentPlayer is within bounds
-  if (gameState.currentPlayer < 0 || gameState.currentPlayer >= playerCount) return false;
-  
-  // Validate consecutiveSixes
-  if (gameState.consecutiveSixes < 0 || gameState.consecutiveSixes > MAX_CONSECUTIVE_SIXES) return false;
+
+  // Non-safe cells cannot contain mixed-color occupancy.
+  for (const [absIdx, owners] of mainOccupancy.entries()) {
+    if (owners.size > 1 && !SAFE_SPOTS.has(Number(absIdx))) return false;
+  }
   
   return true;
 }
@@ -235,8 +268,8 @@ export function GameProvider({ children }) {
       lastRemoteEventTime.current = now;
 
       if (msg.type === 'GAME_STATE') {
-        // Host validates game state before accepting
-        if (mpRef.current.isHost || validateGameState(msg.gameState)) {
+        // Clients may accept validated host snapshots. Host ignores client state payloads.
+        if (!mpRef.current.isHost && validateGameState(msg.gameState)) {
           dispatch({ type: ACTIONS.SET_GAME_STATE, payload: msg.gameState });
         }
       }
@@ -244,7 +277,7 @@ export function GameProvider({ children }) {
         playDiceRoll();
       }
       if (msg.type === 'GAME_START') {
-        if (mpRef.current.isHost || validateGameState(msg.gameState)) {
+        if (!mpRef.current.isHost && validateGameState(msg.gameState)) {
           dispatch({ type: ACTIONS.SET_GAME_STATE, payload: msg.gameState });
           dispatch({ type: ACTIONS.SET_GAME_STARTED, payload: true });
           dispatch({ type: ACTIONS.SET_SCREEN, payload: 'game' });
@@ -255,7 +288,7 @@ export function GameProvider({ children }) {
         }
       }
       if (msg.type === 'TOKEN_MOVE') {
-        if (mp.isHost || validateGameState(msg.gameState)) {
+        if (!mpRef.current.isHost && validateGameState(msg.gameState)) {
           dispatch({ type: ACTIONS.SET_GAME_STATE, payload: msg.gameState });
         }
       }
