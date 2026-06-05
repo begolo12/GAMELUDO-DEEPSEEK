@@ -287,15 +287,19 @@ export function GameProvider({ children }) {
       const saved = JSON.parse(raw);
       if (saved.playerName) dispatch({ type: ACTIONS.SET_PLAYER_NAME, payload: saved.playerName });
       if (saved.roomCode) dispatch({ type: ACTIONS.SET_ROOM_CODE, payload: saved.roomCode });
-      if (saved.screen) dispatch({ type: ACTIONS.SET_SCREEN, payload: saved.screen });
-      if (saved.roomCode && saved.screen === 'game') {
+      if (saved.screen === 'game' && saved.roomCode) {
+        dispatch({ type: ACTIONS.SET_SCREEN, payload: 'game' });
         const restore = saved.isHost
           ? mpRef.current.createRoom(saved.playerName || 'Host', saved.roomCode)
           : mpRef.current.joinRoom(saved.roomCode, saved.playerName || 'Player');
         restore.catch(() => {});
+      } else {
+        clearSession();
       }
-    } catch {}
-  }, [saveSession]);
+    } catch {
+      clearSession();
+    }
+  }, [clearSession]);
 
   // Total effective players (humans + bots, at least 2 for the game to start)
   const effectivePlayerCount = Math.max(2, Math.min(4, humanCount + state.botCount));
@@ -450,6 +454,16 @@ export function GameProvider({ children }) {
     mpRef.current.sendDiceRoll(rolledValue);
     mpRef.current.sendGameState(newState);
 
+    const currentIdxAfterRoll = newState.currentPlayer;
+    const playerInfoAfterRoll = stateRef.current.players[currentIdxAfterRoll];
+    const myIdAfterRoll = mpRef.current.peerId;
+    const movableAfterRoll = (newState.turnPhase === 'move' && playerInfoAfterRoll && !playerInfoAfterRoll.isBot && playerInfoAfterRoll.id === myIdAfterRoll)
+      ? getMovableTokens(newState, currentIdxAfterRoll)
+      : [];
+    if (movableAfterRoll.length === 1) {
+      scheduleAutoMove(movableAfterRoll[0]);
+    }
+
     // ── Toast for special dice results ──
     if (newState.lastRollForfeitedByThreeSixes) {
       pushToast('Three 6s in a row! Turn forfeited.', 'warning', 3000);
@@ -459,7 +473,7 @@ export function GameProvider({ children }) {
     } else if (newState.lastRollHadNoMove) {
       pushToast(`Rolled ${rolledValue}. No movable tokens. Turn passes.`, 'info', 1800, '⏭️');
     }
-  }, [pushToast]);
+  }, [pushToast, scheduleAutoMove]);
 
   /** Move a token (human only) */
   const moveToken = useCallback((tokenIndex) => {
@@ -602,33 +616,34 @@ export function GameProvider({ children }) {
   // auto-move it after a brief pause so the user
   // can see the dice result.
   const autoMoveTimerRef = useRef(null);
+  const scheduleAutoMove = useCallback((tokenIndex) => {
+    if (autoMoveTimerRef.current) clearTimeout(autoMoveTimerRef.current);
+    autoMoveTimerRef.current = setTimeout(() => {
+      moveToken(tokenIndex);
+    }, 350);
+  }, [moveToken]);
+
   useEffect(() => {
     const gs = stateRef.current.gameState;
     if (!gs || gs.gameOver || gs.turnPhase !== 'move') return;
 
     const currentIdx = gs.currentPlayer;
     const playerInfo = stateRef.current.players[currentIdx];
-    // Only for humans
     if (!playerInfo || playerInfo.isBot) return;
 
     const myId = mpRef.current.peerId;
     if (playerInfo.id !== myId) return;
 
     const movable = getMovableTokens(gs, currentIdx);
-
     if (movable.length === 1) {
-      // Auto-move the only movable token after a short delay
-      if (autoMoveTimerRef.current) clearTimeout(autoMoveTimerRef.current);
-      autoMoveTimerRef.current = setTimeout(() => {
-        moveToken(movable[0]);
-      }, 350);
+      scheduleAutoMove(movable[0]);
     }
 
     return () => {
       if (autoMoveTimerRef.current) clearTimeout(autoMoveTimerRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.gameState]);
+  }, [state.gameState, scheduleAutoMove]);
 
   /** Send a chat message */
   const sendChat = useCallback((text) => {
@@ -646,6 +661,9 @@ export function GameProvider({ children }) {
     animTimersRef.current = [];
     // Return to lobby screen
     dispatch({ type: ACTIONS.SET_SCREEN, payload: 'lobby' });
+    if (options.keepRoom) {
+      dispatch({ type: ACTIONS.SET_ROOM_CODE, payload: stateRef.current.roomCode });
+    }
   }, [clearSession]);
 
   // ────────────────────────────────────────────────
