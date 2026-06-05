@@ -208,6 +208,15 @@ export default function useMultiplayer() {
 
     return new Promise((resolve, reject) => {
       const p = createPeer(myId);
+      let settled = false;
+      let timeoutId = null;
+
+      const finish = (fn) => {
+        if (settled) return;
+        settled = true;
+        if (timeoutId) clearTimeout(timeoutId);
+        fn();
+      };
 
       p.on('open', (id) => {
         setPeer(p);
@@ -220,43 +229,50 @@ export default function useMultiplayer() {
         const conn = p.connect(fullId, { reliable: true });
 
         conn.on('open', () => {
-          setRoomCode(code);
-          setConnected(true);
-          isHostRef.current = false; // Joiner is not host
+          finish(() => {
+            setError(null);
+            setRoomCode(code);
+            setConnected(true);
+            isHostRef.current = false; // Joiner is not host
 
-          const connInfo = { id: conn.peer, conn };
-          connectionsRef.current = [connInfo];
-          setConnections([connInfo]);
+            const connInfo = { id: conn.peer, conn };
+            connectionsRef.current = [connInfo];
+            setConnections([connInfo]);
 
-          handleConnection(conn, fullId);
+            handleConnection(conn, fullId);
 
-          setMessages(prev => [...prev, {
-            id: 'sys-join',
-            system: true,
-            text: `Joined room ${code}`,
-            timestamp: Date.now(),
-          }]);
+            setMessages(prev => [...prev, {
+              id: 'sys-join',
+              system: true,
+              text: `Joined room ${code}`,
+              timestamp: Date.now(),
+            }]);
 
-          resolve();
+            resolve();
+          });
         });
 
         conn.on('error', (err) => {
-          setError('Failed to connect: ' + err.message);
-          reject(err);
+          finish(() => {
+            setError('Failed to connect: ' + err.message);
+            reject(err);
+          });
         });
 
         // Timeout
-        setTimeout(() => {
-          if (!connected) {
+        timeoutId = setTimeout(() => {
+          finish(() => {
             setError('Connection timed out. Check the room code.');
             reject(new Error('Connection timeout'));
-          }
+          });
         }, 10000);
       });
 
       p.on('error', (err) => {
-        setError(err.message);
-        reject(err);
+        finish(() => {
+          setError(err.message);
+          reject(err);
+        });
       });
     });
   }, [createPeer, handleConnection, cleanup, connected]);
